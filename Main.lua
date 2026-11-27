@@ -553,6 +553,8 @@ local function smoothLook_Wall(rootPart, targetDirection, duration)
     wallhopSmoothConnections[connection] = true
 end
 
+-- ... (todo o código anterior permanece igual até a função getWallRaycastResult_Wall)
+
 local function getWallRaycastResult_Wall()
     local character = LocalPlayer.Character
     if not character then return nil end
@@ -564,11 +566,13 @@ local function getWallRaycastResult_Wall()
     raycastParams.FilterType = Enum.RaycastFilterType.Exclude
     raycastParams.FilterDescendantsInstances = {character}
 
-    local detectionDistance = 2.5
+    -- Ajuste: Distância de detecção ligeiramente maior para compensar a hitbox
+    local detectionDistance = 3.5
     local closestHit = nil
     local minDistance = detectionDistance + 1
     local hrpCF = humanoidRootPart.CFrame
 
+    -- Raycast em 8 direções
     for i = 0, 7 do
         local angle = math.rad(i * 45)
         local direction = (hrpCF * CFrame.Angles(0, angle, 0)).LookVector
@@ -580,6 +584,7 @@ local function getWallRaycastResult_Wall()
         )
 
         if ray and ray.Instance then
+            -- Filtro: apenas superfícies verticais (paredes)
             if math.abs(ray.Normal.Y) < 0.4 and ray.Distance < minDistance then
                 minDistance = ray.Distance
                 closestHit = ray
@@ -587,19 +592,22 @@ local function getWallRaycastResult_Wall()
         end
     end
 
-    local blockCastOriginCF = hrpCF * CFrame.new(0, -1, -0.5)
-    local okBlock, blockResult = pcall(function()
-        return Workspace:Blockcast(
-            blockCastOriginCF,
-            Vector3.new(1.5, 1, 0.5),
-            hrpCF.LookVector * 1.8,
-            raycastParams
-        )
-    end)
+    -- Ajuste: Blockcast para detectar paredes quando o HRP está muito próximo (evita falha do raycast)
+    local blockCastSize = Vector3.new(1.5, 1, 0.5)
+    local blockCastOffset = CFrame.new(0, -1, -0.5)
+    local blockCastOrigin = humanoidRootPart.CFrame * blockCastOffset
+    local blockCastDirection = humanoidRootPart.CFrame.LookVector
+    local blockCastDistance = 2.0
 
-    if okBlock and blockResult and blockResult.Instance then
+    local blockResult = Workspace:Blockcast(
+        blockCastOrigin,
+        blockCastSize,
+        blockCastDirection * blockCastDistance,
+        raycastParams
+    )
+
+    if blockResult and blockResult.Instance then
         if math.abs(blockResult.Normal.Y) < 0.4 and blockResult.Distance < minDistance then
-            minDistance = blockResult.Distance
             closestHit = blockResult
         end
     end
@@ -613,55 +621,57 @@ local function executeWallJump_Wall(wallRayResult)
     local character = LocalPlayer.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-    local camera = Workspace.CurrentCamera
 
-    if not (humanoid and rootPart and camera and wallRayResult) then return end
+    if not (humanoid and rootPart and wallRayResult) then return end
     if humanoid:GetState() == Enum.HumanoidStateType.Dead then return end
+
+    -- Normal da parede projetada no plano horizontal
+    local wallNormal = wallRayResult.Normal
+    local awayFromWall = Vector3.new(wallNormal.X, 0, wallNormal.Z)
+    if awayFromWall.Magnitude < 0.1 then
+        local lookVector = rootPart.CFrame.LookVector
+        awayFromWall = Vector3.new(-lookVector.X, 0, -lookVector.Z)
+    end
+    if awayFromWall.Magnitude < 0.1 then return end
+    awayFromWall = awayFromWall.Unit
 
     wallhopReady = false
 
-    local wallNormal = wallRayResult.Normal
+        -- ===== CÁLCULO DO IMPULSO (BASEADO NA FÍSICA DO ROBLOX) =====
+    local currentVelocity = rootPart.AssemblyLinearVelocity
+    local horizontalVelocity = Vector3.new(currentVelocity.X, 0, currentVelocity.Z)
 
-    local baseDirectionAwayFromWall = Vector3.new(wallNormal.X, 0, wallNormal.Z)
-    if baseDirectionAwayFromWall.Magnitude < 0.1 then
-        baseDirectionAwayFromWall = -rootPart.CFrame.LookVector
-    end
-    baseDirectionAwayFromWall = baseDirectionAwayFromWall.Unit
+    -- Impulso vertical: 55 studs/s supera o JumpPower padrão (50) e gera subida constante.
+    -- Altura estimada: h = v^2 / (2 * g) ≈ (55^2) / (2 * 196.2) ≈ 7.7 studs (suficiente para wallhop).
+    local verticalImpulse = 55
 
-    local cameraLook = camera.CFrame.LookVector
-    local horizontalCameraLook = Vector3.new(cameraLook.X, 0, cameraLook.Z)
-    if horizontalCameraLook.Magnitude < 0.1 then
-        horizontalCameraLook = baseDirectionAwayFromWall
-    else
-        horizontalCameraLook = horizontalCameraLook.Unit
-    end
+    -- Impulso horizontal: pequeno afastamento (3 studs/s) para não "colar" na parede,
+    -- preservando 80% da velocidade horizontal atual (evita perder o momentum ao segurar W).
+    local horizontalImpulse = awayFromWall * 3 + horizontalVelocity * 0.8
 
-    local finalDirection = (baseDirectionAwayFromWall * 0.7 + horizontalCameraLook * 0.3).Unit
+    local impulse = Vector3.new(
+        horizontalImpulse.X,
+        verticalImpulse,
+        horizontalImpulse.Z
+    )
 
-    local randomAngle = math.rad(math.random(-3, 3))
-    finalDirection = CFrame.Angles(0, randomAngle, 0) * finalDirection
-
-    smoothLook_Wall(rootPart, finalDirection, 0.08)
-
-    RunService.Heartbeat:Wait()
-
-    if not wallhopEnabled or not rootPart.Parent or humanoid.Health <= 0 then
-        wallhopReady = true
-        return
-    end
-
+    -- Aplica o impulso de forma consistente (reset de estado + velocity)
     humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+    rootPart.AssemblyLinearVelocity = impulse
 
-    task.wait(0.04 + math.random() * 0.02)
-
-    if wallhopEnabled and rootPart.Parent then
-        smoothLook_Wall(rootPart, -baseDirectionAwayFromWall, 0.12)
+    -- Re-aplica após o Heartbeat para vencer a velocidade que o Humanoid tenta impor
+    RunService.Heartbeat:Wait()
+    if wallhopEnabled and rootPart.Parent and humanoid.Health > 0 then
+        rootPart.AssemblyLinearVelocity = impulse
     end
 
-    task.delay(0.12 + math.random() * 0.03, function()
+    -- Cooldown: 0.1s é suficiente para o estado "Jumping" assentar e permitir o próximo salto
+    task.delay(0.1, function()
         wallhopReady = true
     end)
 end
+
+-- ... o resto do código continua igual
 
 local function setBombEnabled(state)
     pluginEnabled = state
