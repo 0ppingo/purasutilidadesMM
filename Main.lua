@@ -637,16 +637,19 @@ local function executeWallJump_Wall(wallRayResult)
 
     wallhopReady = false
 
-        -- ===== CÁLCULO DO IMPULSO (BASEADO NA FÍSICA DO ROBLOX) =====
+    -- ===== "VIRADINHA" DO WALLHOP (ROTAÇÃO CONTRA A PAREDE) =====
+    -- Gira ~45° em direção à parede antes do impulso.
+    -- Isso simula o giro que "clipа" a perna e reseta o estado Landed.
+    local rightVector = rootPart.CFrame.RightVector
+    local wallSide = math.sign(awayFromWall:Dot(rightVector))
+    local turnAngle = math.rad(45) * wallSide
+    rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, turnAngle, 0)
+
+    -- ===== CÁLCULO DO IMPULSO =====
     local currentVelocity = rootPart.AssemblyLinearVelocity
     local horizontalVelocity = Vector3.new(currentVelocity.X, 0, currentVelocity.Z)
 
-    -- Impulso vertical: 55 studs/s supera o JumpPower padrão (50) e gera subida constante.
-    -- Altura estimada: h = v^2 / (2 * g) ≈ (55^2) / (2 * 196.2) ≈ 7.7 studs (suficiente para wallhop).
-    local verticalImpulse = 55
-
-    -- Impulso horizontal: pequeno afastamento (3 studs/s) para não "colar" na parede,
-    -- preservando 80% da velocidade horizontal atual (evita perder o momentum ao segurar W).
+    local verticalImpulse = 55 -- ~7.7 studs de subida com gravidade padrão (196.2)
     local horizontalImpulse = awayFromWall * 3 + horizontalVelocity * 0.8
 
     local impulse = Vector3.new(
@@ -655,17 +658,17 @@ local function executeWallJump_Wall(wallRayResult)
         horizontalImpulse.Z
     )
 
-    -- Aplica o impulso de forma consistente (reset de estado + velocity)
+    -- Aplica o impulso
     humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
     rootPart.AssemblyLinearVelocity = impulse
 
-    -- Re-aplica após o Heartbeat para vencer a velocidade que o Humanoid tenta impor
+    -- Re-aplica após o Heartbeat para vencer o velocity do Humanoid
     RunService.Heartbeat:Wait()
     if wallhopEnabled and rootPart.Parent and humanoid.Health > 0 then
         rootPart.AssemblyLinearVelocity = impulse
     end
 
-    -- Cooldown: 0.1s é suficiente para o estado "Jumping" assentar e permitir o próximo salto
+    -- Cooldown
     task.delay(0.1, function()
         wallhopReady = true
     end)
